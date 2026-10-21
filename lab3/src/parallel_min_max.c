@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
             with_files = true;
             break;
 
-          defalut:
+          default:
             printf("Index %d is out of options\n", option_index);
         }
         break;
@@ -79,8 +79,7 @@ int main(int argc, char **argv) {
   }
 
   if (seed == -1 || array_size == -1 || pnum == -1) {
-    printf("Usage: %s --seed \"num\" --array_size \"num\" --pnum \"num\" \n",
-           argv[0]);
+    printf("Usage: %s --seed \"num\" --array_size \"num\" --pnum \"num\" \n",argv[0]);
     return 1;
   }
 
@@ -88,23 +87,51 @@ int main(int argc, char **argv) {
   GenerateArray(array, array_size, seed);
   int active_child_processes = 0;
 
+  int pipes[pnum][2];
+  
+  // Процесс	  Чтение	    Запись
+  //   0	    pipes[0][0]	pipes[0][1]
+  //   1	    pipes[1][0]	pipes[1][1]
+  //   2	    pipes[2][0]	pipes[2][1]
+
+  for (int i = 0; i < pnum; i++) { // инициализируем трубы дочерних процессов
+    pipe(pipes[i]);
+  }
+
   struct timeval start_time;
   gettimeofday(&start_time, NULL);
 
-  for (int i = 0; i < pnum; i++) {
+  for (int i = 0; i < pnum; i++) { // перебор дочерних процессов для записи
     pid_t child_pid = fork();
     if (child_pid >= 0) {
       // successful fork
-      active_child_processes += 1;
+  
+      active_child_processes += 1; // добавляем родительский процесс
+
       if (child_pid == 0) {
         // child process
 
         // parallel somehow
+        unsigned int begin = (unsigned int)((long long)i * array_size/pnum); // разделяем массив на pnum частей для каждого ребёнка
+        unsigned int end = (unsigned int)((long long)(i+1) * array_size/pnum);
 
+        struct MinMax result = GetMinMax(array, begin, end); // результат для конкретнго процесса
         if (with_files) {
           // use files here
+          char filename[100];
+          sprintf(filename, "result_%d.txt",i); // создаем файл
+          FILE *file = fopen(filename,"w"); // это файл для записи 
+          fprintf(file,"%d %d/n",result.min,result.max); // записали результат 
+          fclose(file);
+
+
         } else {
           // use pipe here
+          for (int j = 0; j < pnum; j++) { // мы работаем с i-ым ребёнком и остальные трубы нам не нужны , нужна только запись 
+            close(pipes[j][0]);            
+            if (j != i) close(pipes[j][1]); 
+          }
+          write(pipes[i][1],&result,sizeof(result)); // записываем MinMax в канал pipes[i][1] (канал записи) 
         }
         return 0;
       }
@@ -117,7 +144,7 @@ int main(int argc, char **argv) {
 
   while (active_child_processes > 0) {
     // your code here
-
+    wait(NULL); // блокируем родителя пока ребёнок не пришел 
     active_child_processes -= 1;
   }
 
@@ -125,14 +152,28 @@ int main(int argc, char **argv) {
   min_max.min = INT_MAX;
   min_max.max = INT_MIN;
 
-  for (int i = 0; i < pnum; i++) {
+  for (int i = 0; i < pnum; i++) { // перебор дочерних процессов для чтения
     int min = INT_MAX;
     int max = INT_MIN;
 
     if (with_files) {
       // read from files
+      char filename[100];
+      sprintf(filename, "result_%d.txt",i);
+      FILE *file = fopen(filename, "r");
+      fscanf(file, "%d %d",&min,&max);
+      fclose(file);
+      remove(filename);
+
     } else {
       // read from pipes
+      struct MinMax result;
+      close(pipes[i][1]); // закрываем каналы записи
+      read(pipes[i][0],&result,sizeof(result)); // читамаем каналы чтения
+      close(pipes[i][0]); // закрываем каналы чтения
+      min = result.min;
+      max = result.max;
+       
     }
 
     if (min < min_max.min) min_max.min = min;
